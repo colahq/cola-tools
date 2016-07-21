@@ -1,5 +1,5 @@
 {
-  "name": "@colahq/cola-tools",
+  "name": "cola-tools",
   "version": "0.0.8",
   "description": "Tools for developing Cola Messenger bubbles",
   "main": "bubbler",
