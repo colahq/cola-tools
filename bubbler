@@ -1,0 +1,423 @@
+#!/usr/local/bin/node
+
+var Path = require('path');
+var FileSystem = require('fs');
+var ChildProcess = require('child_process')
+
+function Help(command, arguments, status) {
+
+  if (undefined === status) {
+    status = 0;
+  }
+
+  var info, key;
+  var length = arguments.length;
+  switch (length) {
+    case 0:
+      Usage();
+      break;
+    case 1:
+      key = arguments[0];
+      info = Commands[key];
+      if (!info) {
+        key = 'help';
+        info = Commands[key];
+        status = 1;
+      }
+      break;
+    default:
+      key = 'help';
+      info = Commands[key];
+      status = 1;
+      break;
+  }
+
+  console[((0 == status) ? 'log' : 'error')]('Usage: ' + Path.basename(process.argv[1]) + ' ' + key + ' ' + info.help);
+  process.exit(status);
+}
+
+var Arguments = process.argv.slice(2);
+
+var Commands = {
+  'help' : {
+    usage   : 'Prints this help or help for a command',
+    help    : '[command]',
+    command : Help
+  },
+  'build' : {
+    usage   : 'Builds a bubble to run with Cola',
+    help    : '[--verbose] [--development] [--sourcemap <source map destination directory>] --source <source directory> --destination <destination directory>',
+    command : Build
+  },
+  'debugger' : {
+    usage   : 'Enables debugging of a bubble, optionially connecting to Cola Development Server running on ip:port (see --connect)',
+    help    : '[--connect <ip>:<port>] --source <source directory>',
+    command : Debugger
+  }
+};
+
+function Usage(unknown) {
+
+  var output = [
+    'Usage: ' + Path.basename(process.argv[1]) + ' <command>',
+    '',
+    'Commands:'
+  ];
+
+  if (unknown) {
+    output.splice(0, 0, 'Unrecognized command: ' + unknown);
+  }
+
+  console.error(output.concat(Object.keys(Commands).map(function(name) {
+    return '\t' + name + ' - ' + Commands[name].usage;
+  })).join('\n'));
+
+  process.exit(1);
+}
+
+if (0 === Arguments.length) {
+  Usage();
+}
+
+var Command = Arguments.shift();
+
+if (!Commands[Command]) {
+  Usage(Command);
+}
+
+Command = Commands[Command];
+Command.command(Command, Arguments);
+
+function LoadManifest(directory) {
+
+  var path = Path.join(directory, 'manifest.json');
+
+  var manifest;
+  try {
+    manifest = JSON.parse(FileSystem.readFileSync(path, 'utf8'));
+  }
+  catch (err) {
+    console.error('Unable to read bubble manifest from \"' + path + '\"!');
+    process.exit(1);
+  }
+
+  if (!manifest) {
+    console.error('Bubble manifest from \"' + path + '\" is empty!');
+    process.exit(1);
+  }
+
+  return manifest;
+}
+
+function VerifyManifest(manifest) {
+
+  if (1 != manifest['format']) {
+    console.error('The bubble manifest format is not supported!');
+    process.exit(1);
+  }
+
+  var identifier = manifest['identifier'];
+  var version = manifest['version'];
+
+  if (!identifier || !version || (0 == identifier.length) || (1 > version)) {
+    console.error('The bubble manifest must contain a valid identifier and version!');
+    process.exit(1);
+  }
+
+  if (0 != (version - Math.floor(version))) {
+    console.error('The bubble version must be an integer value!');
+    process.exit(1);
+  }
+
+  var name = manifest['name'];
+  if (!name || (0 == name.length)) {
+    console.error('The bubble manifest must contain a valid name for the bubble!');
+    process.exit(1);
+  }
+}
+
+function EnsureDirectory(directory) {
+
+  directory = Path.normalize(directory);
+
+  var parts = [];
+  do {
+    var part = Path.basename(directory);
+    if (part === parts[0]) break;
+    if (0 == part.length) {
+      parts.splice(0, 0, directory);
+      break;
+    }
+    parts.splice(0, 0, part);
+    directory = Path.dirname(directory);
+  } while (1);
+
+  directory = parts.shift();
+  if (parts.length > 0) {
+    directory = Path.join(directory, parts.shift());
+  }
+
+  do {
+
+    try {
+      FileSystem.mkdirSync(directory);
+    }
+    catch (err) {
+      if (err.code != 'EEXIST') {
+        console.error('Unable to ensure the destination directory!');
+        process.exit(err.code);
+      };
+    }
+
+    if (0 == parts.length) {
+      break;
+    }
+
+    directory = Path.join(directory, parts.shift());
+  } while (1);
+}
+
+function AddVersionsToManifest(manifest) {
+  manifest.tools = {
+    'cola-tools' : require('./package.json').version,
+    'cola-api'   : require('cola-api/package.json').version
+  };
+  return manifest;
+}
+
+function CopyFile(source, destination) {
+
+  var BUFFER_LENGTH = 64*1024
+  var buffer = new Buffer(BUFFER_LENGTH)
+  var i = FileSystem.openSync(source, 'r')
+  var o = FileSystem.openSync(destination, 'w')
+
+  var position = 0;
+  do {
+    var read = FileSystem.readSync(i, buffer, 0, BUFFER_LENGTH, position);
+    if (0 > read) {
+        console.error('Error reading ' + source + '!');
+        process.exit(1);
+    }
+    else if (0 == read) {
+      FileSystem.closeSync(i);
+      FileSystem.closeSync(o);
+      break;
+    }
+    FileSystem.writeSync(o, buffer, 0, read);
+    position += read;
+  } while (1);
+}
+
+function CopyResources(manifest, source, destination) {
+
+  var icons = manifest['icons'] || {};
+  Object.keys(icons).forEach(function(key) {
+    var from = icons[key];
+    from = Path.normalize(Path.join(source, from));
+
+    var to = icons[key];
+    to = Path.normalize(Path.join(destination, to));
+
+    EnsureDirectory(Path.dirname(to));
+
+    try {
+      CopyFile(from, to);
+    }
+    catch (err) {
+        console.error('Error copying ' + from + '!');
+        process.exit(1);
+    }
+  });
+}
+
+function RunPackager(manifest, source, destination, sourcemap, verbose, development, interactive) {
+
+  var api = Path.join(Path.dirname(process.argv[1]), '../cola-api/.');
+  api = Path.normalize(api);
+
+  var directory = Path.join(Path.dirname(process.argv[1]), '../react-native/local-cli/cli.js');
+  directory = Path.normalize(directory);
+
+  var options;
+  var arguments;
+  if (!interactive) {
+    var entry = Path.join(source, 'index.js');
+    entry = Path.normalize(entry);
+
+    var bundle = Path.join(destination, 'index.bundle');
+    bundle = Path.normalize(bundle);
+
+    var arguments = [
+      directory,
+      'bundle',
+      '--config', api,
+      '--platform', 'ios',
+      '--dev', (development ? 'true' : 'false'),
+      '--projectRoots', source,
+      '--entry-file', entry,
+      '--bundle-output', bundle,
+      '--assets-dest', '.'
+    ];
+    if (verbose) {
+      arguments.push('--verbose');
+    }
+    if (development || sourcemap) {
+      arguments.push('--sourcemap-output');
+      arguments.push(sourcemap || Path.join(destination, 'index.map'));
+    }
+
+    options = {'cwd':destination};
+  }
+
+  else {
+
+    var node_modules = Path.join(Path.dirname(process.argv[1]), '../.');
+    node_modules = Path.normalize(node_modules);
+
+    arguments = [
+      directory,
+      'start',
+      '--config', api,
+      '--projectRoots', source + ',' + node_modules,
+    ];
+  }
+
+  var packager = ChildProcess.spawn('node', arguments, options);
+
+  packager.stdout.on('data', function(data) {
+    console.log(data.toString());
+  });
+
+  packager.stderr.on('data', function(data) {
+    console.error(data.toString());
+  });
+
+  packager.on('exit', function(code) {
+
+    if (0 != code) {
+      process.exit(code);
+    }
+
+    if (!interactive) {
+
+      CopyResources(manifest, source, destination);
+
+      // All done!
+      process.exit(0)
+    }
+    else {
+      RunPackager(manifest, source, destination, sourcemap, verbose, development, true);
+    }
+  });
+}
+
+function Build(command, arguments) {
+
+  var source, destination;
+  var development = false;
+  var verbose = false;
+  var sourcemap;
+  while (0 != arguments.length) {
+    var arg = arguments.shift();
+    switch (arg) {
+      case '--source':
+        source = arguments.shift();
+        break;
+      case '--destination':
+        destination = arguments.shift();
+        break;
+      case '--development':
+        development = true;
+        break;
+      case '--verbose':
+        verbose = true;
+        break;
+      case '--sourcemap':
+        sourcemap = arguments.shift();
+        break;
+      default:
+        Help(Commands['help'], ['build'], 1);
+        break;
+    }
+  }
+
+  if (!source || !destination) {
+    Help(Commands['help'], ['build'], 1);
+  }
+
+  source = Path.normalize(source);
+  if (!Path.isAbsolute(source)) {
+    source = Path.resolve(source);
+  }
+
+  var manifest = LoadManifest(source);
+  VerifyManifest(manifest);
+
+  destination = Path.normalize(destination);
+  if (!Path.isAbsolute(destination)) {
+    destination = Path.resolve(destination);
+  }
+
+  destination = Path.join(destination, manifest['identifier'], '' + Math.floor(manifest['version']));
+  EnsureDirectory(destination);
+
+  manifest = AddVersionsToManifest(manifest);
+
+  try {
+    FileSystem.writeFileSync(Path.join(destination, 'manifest.json'), JSON.stringify(manifest), {'mode':0o600});
+  } catch (err) {
+    console.log('Unable to write the bubble manifest!');
+    process.exit(err.code || 1);
+  }
+
+  if (sourcemap) {
+    sourcemap = Path.normalize(sourcemap);
+    if (!Path.isAbsolute(sourcemap)) {
+      sourcemap = Path.resolve(sourcemap);
+    }
+  }
+
+  RunPackager(manifest, source, destination, sourcemap, verbose, development, false);
+}
+
+function Debugger(command, arguments) {
+
+  var connect = false, ip_port, source;
+  while (0 != arguments.length) {
+    var arg = arguments.shift();
+    switch (arg) {
+      case '--connect':
+        connect = true;
+        ip_port = arguments.shift();
+        break;
+      case '--source':
+        source = arguments.shift();
+        break;
+      default:
+        Help(Commands['help'], ['debugger'], 1);
+        break;
+    }
+  }
+
+  if (!source || (connect && !ip_port)) {
+    Help(Commands['help'], ['debugger'], 1);
+  }
+
+  source = Path.normalize(source);
+  if (!Path.isAbsolute(source)) {
+    source = Path.resolve(source);
+  }
+  var run = function() {
+    RunPackager(undefined, source, undefined, undefined, false, true, true);
+  };
+
+  if (connect) {
+    require('http').get('http://' + ip_port, function() {
+     run();
+   });
+  }
+  else {
+    run();
+  }
+}
