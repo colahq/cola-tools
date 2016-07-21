@@ -1,11 +1,19 @@
 {
-  "name": "cola-tools",
-  "version": "0.1.0",
-  "description": "Tool set for creating bubbles for Cola Messenger",
+  "name": "@colahq/cola-tools",
+  "version": "0.0.8",
+  "description": "Tools for developing Cola Messenger bubbles",
   "main": "bubbler",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Cola, Inc.",
-  "license": "ISC"
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/colahq/cola-tools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/colahq/cola-bubble/issues"
+  },
+  "homepage": "https://github.com/colahq/cola-bubble#readme"
 }

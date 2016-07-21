@@ -180,7 +180,7 @@ function EnsureDirectory(directory) {
 function AddVersionsToManifest(manifest) {
   manifest.tools = {
     'cola-tools' : require('./package.json').version,
-    'cola-api'   : require('cola-api/package.json').version
+    'cola-api'   : require('@colahq/cola-api/package.json').version
   };
   return manifest;
 }
@@ -236,7 +236,7 @@ function RunPackager(manifest, source, destination, sourcemap, verbose, developm
   var api = Path.join(Path.dirname(process.argv[1]), '../cola-api/.');
   api = Path.normalize(api);
 
-  var directory = Path.join(Path.dirname(process.argv[1]), '../react-native/local-cli/cli.js');
+  var directory = Path.join(Path.dirname(process.argv[1]), '../../react-native/local-cli/cli.js');
   directory = Path.normalize(directory);
 
   var options;
@@ -272,7 +272,7 @@ function RunPackager(manifest, source, destination, sourcemap, verbose, developm
 
   else {
 
-    var node_modules = Path.join(Path.dirname(process.argv[1]), '../.');
+    var node_modules = Path.join(Path.dirname(process.argv[1]), '../../.');
     node_modules = Path.normalize(node_modules);
 
     arguments = [
